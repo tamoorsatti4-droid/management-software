@@ -80,11 +80,11 @@ app.get('/api/products', (req, res) => {
 });
 
 app.post('/api/products', (req, res) => {
-  const { name, purchase_price, selling_price, stock } = req.body;
-  db.run("INSERT INTO products (name, purchase_price, selling_price, stock) VALUES (?, ?, ?, ?)", 
-    [name, purchase_price, selling_price, stock || 0], function(err) {
+  const { name, purchase_price, selling_price, stock, serial_number } = req.body;
+  db.run("INSERT INTO products (name, purchase_price, selling_price, stock, serial_number) VALUES (?, ?, ?, ?, ?)", 
+    [name, purchase_price, selling_price, stock || 0, serial_number || ''], function(err) {
     if (err) return res.status(500).json({ error: err.message });
-    res.json({ id: this.lastID, name, purchase_price, selling_price, stock });
+    res.json({ id: this.lastID, name, purchase_price, selling_price, stock, serial_number });
   });
 });
 
@@ -107,8 +107,8 @@ app.post('/api/sales', (req, res) => {
     const sale_id = this.lastID;
     
     items.forEach(item => {
-      db.run("INSERT INTO sale_items (sale_id, product_id, quantity, price) VALUES (?, ?, ?, ?)",
-        [sale_id, item.product_id, item.quantity, item.price]);
+      db.run("INSERT INTO sale_items (sale_id, product_id, quantity, price, serial_number) VALUES (?, ?, ?, ?, ?)",
+        [sale_id, item.product_id, item.quantity, item.price, item.serial_number || '']);
       db.run("UPDATE products SET stock = stock - ? WHERE id = ?", [item.quantity, item.product_id]);
     });
     
@@ -156,6 +156,97 @@ app.get('/api/dashboard', (req, res) => {
             res.json(dashboardData);
          });
       });
+    });
+  });
+});
+
+// --- ADVANCED REPORTS API ---
+app.get('/api/reports', (req, res) => {
+  const type = req.query.type || 'daily'; // daily, weekly, monthly, yearly
+  
+  let dateModifier = '';
+  switch (type) {
+    case 'daily': dateModifier = "strftime('%Y-%m-%d', date)"; break;
+    case 'weekly': dateModifier = "strftime('%Y-%W', date)"; break; // Year and Week number
+    case 'monthly': dateModifier = "strftime('%Y-%m', date)"; break;
+    case 'yearly': dateModifier = "strftime('%Y', date)"; break;
+    default: dateModifier = "strftime('%Y-%m-%d', date)";
+  }
+
+  const query = `
+    SELECT 
+      ${dateModifier} as period, 
+      SUM(total_amount) as total_sales
+    FROM sales 
+    GROUP BY period 
+    ORDER BY period DESC 
+    LIMIT 30
+  `;
+
+  db.all(query, [], (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    
+    // Also fetch expenses for the same grouped periods to provide comprehensive data
+    const expensesQuery = `
+      SELECT 
+        ${dateModifier} as period, 
+        SUM(amount) as total_expenses
+      FROM expenses 
+      GROUP BY period 
+      ORDER BY period DESC 
+      LIMIT 30
+    `;
+    
+    db.all(expensesQuery, [], (err2, expensesRows) => {
+       if (err2) return res.status(500).json({ error: err2.message });
+       
+       // Merge the data based on 'period'
+       let mergedData = {};
+       rows.forEach(r => {
+         mergedData[r.period] = { period: r.period, sales: r.total_sales || 0, expenses: 0 };
+       });
+       expensesRows.forEach(e => {
+         if (!mergedData[e.period]) {
+            mergedData[e.period] = { period: e.period, sales: 0, expenses: e.total_expenses || 0 };
+         } else {
+            mergedData[e.period].expenses = e.total_expenses || 0;
+         }
+       });
+       
+       res.json(Object.values(mergedData).sort((a, b) => b.period.localeCompare(a.period)));
+    });
+  });
+});
+
+// --- AI INSIGHTS API (MOCK) ---
+app.get('/api/ai-insights', (req, res) => {
+  // In a real scenario, this would gather all recent DB data and send it to an LLM like Gemini/OpenAI
+  // For now, we simulate AI analysis logic based on a quick snapshot
+  
+  db.get("SELECT SUM(total_amount) as sales FROM sales WHERE date >= date('now', '-7 days')", [], (err, salesRow) => {
+    db.get("SELECT SUM(amount) as expenses FROM expenses WHERE date >= date('now', '-7 days')", [], (err, expRow) => {
+      
+      const weeklySales = salesRow ? salesRow.sales || 0 : 0;
+      const weeklyExpenses = expRow ? expRow.expenses || 0 : 0;
+      
+      const insights = [];
+      
+      if (weeklySales === 0 && weeklyExpenses === 0) {
+        insights.push({ type: 'neutral', message: "No data for the past 7 days. Start recording sales and expenses to get AI insights."});
+      } else {
+        if (weeklySales > weeklyExpenses * 2) {
+           insights.push({ type: 'positive', message: "Excellent performance! Your revenue is more than double your expenses this week. Consider reinvesting profits into marketing or inventory expansion." });
+        } else if (weeklySales > weeklyExpenses) {
+           insights.push({ type: 'warning', message: "You are profitable this week, but margins are tight. Review your miscellaneous expenses to see where costs can be cut."});
+        } else {
+           insights.push({ type: 'negative', message: "Critical Alert: Your expenses have exceeded your revenue over the last 7 days. You are operating at a loss. Immediately pause non-essential restocks."});
+        }
+        
+        // Add a generic growth tip
+        insights.push({ type: 'tip', message: "Tip: Tracking serial numbers for high-value items can reduce shrinkage and improve warranty management."});
+      }
+      
+      res.json({ insights, metrics: { weeklySales, weeklyExpenses } });
     });
   });
 });

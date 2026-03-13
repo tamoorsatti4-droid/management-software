@@ -36,8 +36,14 @@ db.serialize(() => {
     name TEXT NOT NULL,
     purchase_price REAL,
     selling_price REAL,
-    stock INTEGER DEFAULT 0
+    stock INTEGER DEFAULT 0,
+    serial_number TEXT
   )`);
+  
+  // Safe Alter for existing databases. If column exists, it will just throw a silent error we catch or ignore.
+  db.run(`ALTER TABLE products ADD COLUMN serial_number TEXT`, (err) => {
+    // Column might already exist, ignore error
+  });
 
   // Purchases Table (Inventory Restock)
   db.run(`CREATE TABLE IF NOT EXISTS purchases (
@@ -63,9 +69,15 @@ db.serialize(() => {
     product_id INTEGER,
     quantity INTEGER,
     price REAL,
+    serial_number TEXT,
     FOREIGN KEY(sale_id) REFERENCES sales(id),
     FOREIGN KEY(product_id) REFERENCES products(id)
   )`);
+
+  // Safe Alter for sale items too
+  db.run(`ALTER TABLE sale_items ADD COLUMN serial_number TEXT`, (err) => {
+    // Column might already exist, ignore error
+  });
 
   // Expenses Table
   db.run(`CREATE TABLE IF NOT EXISTS expenses (
